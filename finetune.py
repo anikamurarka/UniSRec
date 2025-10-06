@@ -34,7 +34,7 @@ def finetune(dataset, pretrained_file, fix_enc=True, **kwargs):
 
     # Load pre-trained model
     if pretrained_file != '':
-        checkpoint = torch.load(pretrained_file)
+        checkpoint = torch.load(pretrained_file, weights_only=False)
         logger.info(f'Loading from {pretrained_file}')
         logger.info(f'Transfer [{checkpoint["config"]["dataset"]}] -> [{dataset}]')
         model.load_state_dict(checkpoint['state_dict'], strict=False)
