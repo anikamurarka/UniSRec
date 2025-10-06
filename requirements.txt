@@ -1,0 +1,14 @@
+recbole==1.2.0
+torch==2.8.0
+transformers==4.57.0
+tokenizers==0.22.1
+tqdm
+numpy
+pandas
+scikit-learn
+scipy
+regex
+PyYAML
+huggingface-hub
+safetensors
+tensorboard
