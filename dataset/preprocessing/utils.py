@@ -24,7 +24,7 @@ def load_plm(model_name='bert-base-uncased'):
 
 amazon_dataset2fullname = {
     'Beauty': 'All_Beauty',
-    'Fashion': 'AMAZON_FASHION',
+    'Fashion': 'Amazon_Fashion',
     'Appliances': 'Appliances',
     'Arts': 'Arts_Crafts_and_Sewing',
     'Automotive': 'Automotive',
@@ -51,5 +51,7 @@ amazon_dataset2fullname = {
     'Sports': 'Sports_and_Outdoors',
     'Tools': 'Tools_and_Home_Improvement',
     'Toys': 'Toys_and_Games',
-    'Games': 'Video_Games'
+    'Games': 'Video_Games',
+    "ml-1m": "MovieLens",
+    "Health": "Health_and_Personal_Care"
 }

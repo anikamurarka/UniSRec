@@ -13,25 +13,37 @@ from utils import check_path, set_device, load_plm, amazon_dataset2fullname
 
 
 def load_ratings(file):
-    users, items, inters = set(), set(), set()
+    users, items, inters, parent_asins = set(), set(), set(), set()
     with open(file, 'r') as fp:
         for line in tqdm(fp, desc='Load ratings'):
-            try:
-                item, user, rating, time = line.strip().split(',')
+            try: 
+                # appliances -> timestamp,asin,verified_purchase,user_id,parent_asin,rating,images,text,title,helpful_vote
+                # health -> title,parent_asin,images,timestamp,text,helpful_vote,rating,user_id,verified_purchase,asin
+                # fashion -> parent_asin,timestamp,user_id,helpful_vote,verified_purchase,text,asin,images,rating,title
+                # sport -> text,asin,parent_asin,user_id,rating,verified_purchase,images,timestamp,title,helpful_vote
+
+                
+                time, item,_, user, parent_asin, rating, _, _, _, _ = line.strip().split(',')
+                # _, item, _,time,_,_,rating,user,_,_ = line.strip().split(',')
+                # item,time,user,_,_,_,_,_,rating,_ = line.strip().split(',')
+                # _,item,parent_asin,user,rating, _, _, time, _, _ = line.strip().split(',')
                 users.add(user)
                 items.add(item)
-                inters.add((user, item, float(rating), int(time)))
+                inters.add((user, item, float(rating), int(time),  parent_asin))
+                parent_asins.add(parent_asin)
             except ValueError:
-                print(line)
-    return users, items, inters
+                pass
+    return users, items, inters, parent_asins
 
 
 def load_meta_items(file):
     items = set()
     with gzip.open(file, 'r') as fp:
+        # print(file)
         for line in tqdm(fp, desc='Load metas'):
             data = json.loads(line)
-            items.add(data['asin'])
+            # print(data)
+            items.add(data['parent_asin'])
     return items
 
 
@@ -65,7 +77,7 @@ def filter_inters(inters, can_items=None,
     if can_items:
         print('\nFiltering by meta items: ')
         for unit in inters:
-            if unit[1] in can_items:
+            if unit[4] in can_items:
                 new_inters.append(unit)
         inters, new_inters = new_inters, []
         print('    The number of inters: ', len(inters))
@@ -102,8 +114,8 @@ def filter_inters(inters, can_items=None,
 def make_inters_in_order(inters):
     user2inters, new_inters = collections.defaultdict(list), list()
     for inter in inters:
-        user, item, rating, timestamp = inter
-        user2inters[user].append((user, item, rating, timestamp))
+        user, item, rating, timestamp, parent_asin = inter
+        user2inters[user].append((user, item, rating, timestamp, parent_asin))
     for user in user2inters:
         user_inters = user2inters[user]
         user_inters.sort(key=lambda d: d[3])
@@ -120,10 +132,10 @@ def preprocess_rating(args):
 
     # load ratings
     rating_file_path = os.path.join(args.input_path, 'Ratings', dataset_full_name + '.csv')
-    rating_users, rating_items, rating_inters = load_ratings(rating_file_path)
+    rating_users, rating_items, rating_inters, parent_asins = load_ratings(rating_file_path)
 
     # load item IDs with meta data
-    meta_file_path = os.path.join(args.input_path, 'Metadata', f'meta_{dataset_full_name}.json.gz')
+    meta_file_path = os.path.join(args.input_path, 'Metadata', f'meta_{dataset_full_name}.jsonl.gz')
     meta_items = load_meta_items(meta_file_path)
 
     # 1. Filter items w/o meta data;
@@ -142,12 +154,15 @@ def preprocess_rating(args):
 
 
 def get_user_item_from_ratings(ratings):
-    users, items = set(), set()
-    for line in ratings:
-        user, item, rating, time = line
+    users, items, parent_asins, item2parent = set(), set(), set(), dict()
+    for user, item, rating, time, parent_asin in ratings:
         users.add(user)
         items.add(item)
-    return users, items
+        parent_asins.add(parent_asin)
+        # map each item (ASIN) to its parent_asin
+        item2parent[item] = parent_asin
+    return users, items, parent_asins, item2parent
+
 
 
 def clean_text(raw_text):
@@ -172,25 +187,45 @@ def clean_text(raw_text):
     return cleaned_text
 
 
-def generate_text(args, items, features):
+def generate_text(args, items, item2parent, features):
     item_text_list = []
-    already_items = set()
 
     dataset_full_name = amazon_dataset2fullname[args.dataset]
-    meta_file_path = os.path.join(args.input_path, 'Metadata', f'meta_{dataset_full_name}.json.gz')
+    meta_file_path = os.path.join(args.input_path, 'Metadata', f'meta_{dataset_full_name}.jsonl.gz')
+
+    # which parent_asins we actually need
+    parent_asins_needed = set(item2parent.values())
+    parent2text = {}
+
+    # 1st pass: build parent_asin -> text from metadata
     with gzip.open(meta_file_path, 'r') as fp:
         for line in tqdm(fp, desc='Generate text'):
             data = json.loads(line)
-            item = data['asin']
-            if item in items and item not in already_items:
-                already_items.add(item)
-                text = ''
-                for meta_key in features:
-                    if meta_key in data:
-                        meta_value = clean_text(data[meta_key])
-                        text += meta_value + ' '
-                item_text_list.append([item, text])
+            meta_parent_asin = data.get('parent_asin', None)
+            if meta_parent_asin is None:
+                continue
+            if meta_parent_asin not in parent_asins_needed:
+                continue
+            if meta_parent_asin in parent2text:
+                continue
+
+            text = ''
+            for meta_key in features:
+                if meta_key in data:
+                    meta_value = clean_text(data[meta_key])
+                    text += meta_value + ' '
+            parent2text[meta_parent_asin] = text
+
+    # 2nd pass: assign text to each item via its parent_asin
+    for item in items:
+        parent_asin = item2parent[item]
+        text = parent2text.get(parent_asin, '')
+        if text == '':
+            text = '.'   # fallback
+        item_text_list.append([item, text])
+
     return item_text_list
+
 
 
 def load_text(file):
@@ -218,10 +253,10 @@ def write_text_file(item_text_list, file):
 def preprocess_text(args, rating_inters):
     print('Process text data: ')
     print(' Dataset: ', args.dataset)
-    rating_users, rating_items = get_user_item_from_ratings(rating_inters)
+    rating_users, rating_items, parent_asins, item2parent = get_user_item_from_ratings(rating_inters)
 
     # load item text and clean
-    item_text_list = generate_text(args, rating_items, ['title', 'category', 'brand'])
+    item_text_list = generate_text(args, rating_items, item2parent, ['title', 'categories'])
     print('\n')
 
     # return: list of (item_ID, cleaned_item_text)
@@ -232,7 +267,7 @@ def convert_inters2dict(inters):
     user2items = collections.defaultdict(list)
     user2index, item2index = dict(), dict()
     for inter in inters:
-        user, item, rating, timestamp = inter
+        user, item, rating, timestamp,_ = inter
         if user not in user2index:
             user2index[user] = len(user2index)
         if item not in item2index:
@@ -363,9 +398,9 @@ def convert_to_atomic_files(args, train_data, valid_data, test_data):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', type=str, default='Scientific', help='Pantry / Scientific / Instruments / Arts / Office')
-    parser.add_argument('--user_k', type=int, default=5, help='user k-core filtering')
-    parser.add_argument('--item_k', type=int, default=5, help='item k-core filtering')
+    parser.add_argument('--dataset', type=str, default='Appliances', help='Pantry / Scientific / Instruments / Arts / Office')
+    parser.add_argument('--user_k', type=int, default=3, help='user k-core filtering')
+    parser.add_argument('--item_k', type=int, default=1, help='item k-core filtering')
     parser.add_argument('--input_path', type=str, default='../raw/')
     parser.add_argument('--output_path', type=str, default='../downstream/')
     parser.add_argument('--gpu_id', type=int, default=0, help='ID of running GPU')
@@ -380,7 +415,7 @@ if __name__ == '__main__':
 
     # load interactions from raw rating file
     rating_inters = preprocess_rating(args)
-
+    # print(args.dataset)
     # load item text from raw meta data file
     item_text_list = preprocess_text(args, rating_inters)
 
